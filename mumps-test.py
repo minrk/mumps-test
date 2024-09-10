@@ -18,31 +18,56 @@ except ImportError:
     # not needed in outer env
     pass
 
+try:
+    import mumps
+    import scipy.sparse as sp
+    import numpy as np
+except ImportError:
+    pass
 
-def create_envs(blas):
+
+def create_envs(blas, kind="mumps"):
     spec = [
         "python=3.12",
         "pip",
-        "mpich",
-        "fenics-dolfinx",
         f"blas=*=*{blas}",
-        "mumps-mpi=5.7.3",
     ]
+    if kind == "fenics":
+        mumps_pkg = "mumps-mpi"
+        spec.extend([
+            "mpich",
+            "fenics-dolfinx",
+        ])
+    else:
+        mumps_pkg = "mumps-seq"
+        spec.extend([
+            "scipy",
+            "python-mumps",
+        ])
+
     for name, extra_spec in [
-        ("before", ["mumps-mpi=5.7.3=*_0"]),
-        ("omp", ["mumps-mpi=5.7.3=*_4"]),
-        ("gemmt", ["mumps-mpi=5.7.3=*_104"]),
+        ("before", [f"{mumps_pkg}=5.7.3=*_0"]),
+        ("omp", [f"{mumps_pkg}=5.7.3=*_4"]),
+        ("gemmt", [f"{mumps_pkg}=5.7.3=*_104"]),
     ]:
-        env_name = f"{name}-{blas}"
+        env_name = f"{kind}-{name}-{blas}"
         run(
             ["mamba", "create", "-y", "-n", env_name, "-c", "minrk/label/mumps-gemmt"]
             + spec
             + extra_spec,
             check=True,
         )
-        run(
-            ["mamba", "run", "-n", env_name, "python3", "-mpip", "install", "wurlitzer"]
-        )
+        if kind == "fenics":
+            run([
+                "mamba",
+                "run",
+                "-n",
+                env_name,
+                "python3",
+                "-mpip",
+                "install",
+                "wurlitzer",
+            ])
 
 
 def parse_mumps_times(output: str) -> dict[str, float]:
@@ -124,18 +149,55 @@ def time_solve_poisson(size: int) -> float:
     return times
 
 
-def inner_main(size: int, samples: int, fname: str):
+def time_mumps_python(size: int) -> float:
+    sq_size = size * size
+    A = sp.diags_array(
+        [
+            -30 / 12 * np.ones(sq_size),
+            16 / 12 * np.ones(sq_size - 1),
+            16 / 12 * np.ones(sq_size - 1),
+            # -1 / 12 * np.ones(size - 2),
+            # -1 / 12 * np.ones(size - 2),
+        ],
+        offsets=[0, -1, 1],  # , -2, 2],
+    )
+    b = np.linspace(0, 1, sq_size)
+    times = {}
+    with mumps.Context() as ctx:
+        ctx.set_matrix(A, overwrite_a=True, symmetric=True)
+        ctx.analyze(ordering="metis")
+        ctx.factor(reuse_analysis=True)
+        times["analyze"] = ctx.analysis_stats.time
+        times["factorize"] = ctx.factor_stats.time
+        tic = time.perf_counter()
+        ctx.solve(b)
+        toc = time.perf_counter()
+        times["solve"] = toc - tic
+
+    return times
+
+
+def inner_main(size: int, samples: int, fname: str, kind: str):
     common_fields = {
         "env": Path(sys.prefix).name,
         "threads": int(os.environ.get("OMP_NUM_THREADS", "1")),
-        "procs": MPI.COMM_WORLD.size,
         "size": size,
+        "kind": kind,
     }
+    if kind == "fenics":
+        common_fields["procs"] = MPI.COMM_WORLD.size
+        rank = MPI.COMM_WORLD.rank
+    else:
+        common_fields["procs"] = 1
+        rank = 0
     print(f"Collecting {common_fields} to {fname}")
     for i in range(samples):
-        times = time_solve_poisson(size)
+        if kind == "fenics":
+            times = time_solve_poisson(size)
+        else:
+            times = time_mumps_python(size)
         times.update(common_fields)
-        if MPI.COMM_WORLD.rank == 0:
+        if rank == 0:
             print(times)
             if fname:
                 print(f"Writing to {fname}")
@@ -144,7 +206,7 @@ def inner_main(size: int, samples: int, fname: str):
                     f.write("\n")
 
 
-def run_one(env_name, samples, size, omp_threads, mpi_size):
+def run_one(env_name, samples, size, omp_threads, mpi_size, kind):
     fname = f"{env_name}-omp{omp_threads}-mpi{mpi_size}.jsonl"
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
@@ -154,13 +216,16 @@ def run_one(env_name, samples, size, omp_threads, mpi_size):
     env["PATH"] = f"{env_bin}:{env['PATH']}"
     print(f"Collecting {fname}")
     # don't use mamba/conda run, which suppresses output
+    if kind == "fenics":
+        prefix = ["mpiexec", "-n", f"{mpi_size}"]
+    else:
+        prefix = []
     p = run(
-        [
-            "mpiexec",
-            "-n",
-            f"{mpi_size}",
+        prefix
+        + [
             "python",
             __file__,
+            f"--kind={kind}",
             f"--size={size}",
             f"--samples={samples}",
             "inner",
@@ -172,13 +237,13 @@ def run_one(env_name, samples, size, omp_threads, mpi_size):
     )
 
 
-def collect(samples, size, threads, mpi_sizes, envs):
+def collect(samples, size, threads, mpi_sizes, envs, kind):
     for mpi_size in mpi_sizes:
         for omp_threads in threads:
             for env_name in envs:
-                if omp_threads > 1 and env_name == "mumps-before":
+                if omp_threads > 1 and "before" in env_name:
                     continue
-                run_one(env_name, samples, size, omp_threads, mpi_size)
+                run_one(env_name, samples, size, omp_threads, mpi_size, kind)
 
 
 def main():
@@ -193,6 +258,9 @@ def main():
 
     parser.add_argument("--size", type=int, default=1024)
     parser.add_argument("--samples", type=int, default=5)
+    parser.add_argument(
+        "--kind", type=str, default="mumps", choices=["mumps", "fenics"]
+    )
 
     inner_parser.add_argument("--out", type=str)
 
@@ -209,17 +277,20 @@ def main():
 
     args = parser.parse_args()
     if args.action == "inner":
-        inner_main(size=args.size, samples=args.samples, fname=args.out)
+        inner_main(size=args.size, samples=args.samples, fname=args.out, kind=args.kind)
     elif args.action == "collect":
+        if args.kind == "mumps":
+            args.np = [1]
         collect(
             size=args.size,
             samples=args.samples,
             threads=args.threads,
             mpi_sizes=args.np,
             envs=args.envs,
+            kind=args.kind,
         )
     elif args.action == "envs":
-        create_envs(blas=args.blas)
+        create_envs(blas=args.blas, kind=args.kind)
     else:
         raise ValueError("Specify an action: 'inner' or 'collect'")
 
