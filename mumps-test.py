@@ -136,7 +136,7 @@ def time_mumps_python(size: int) -> float:
 def inner_main(size: int, samples: int, fname: str, kind: str):
     from mpi4py import MPI
 
-    name = os.environ.get("PIXI_PROJECT_NAME")
+    name = os.environ.get("PIXI_ENVIRONMENT_NAME")
     if not name:
         name = os.environ.get("CONDA_DEFAULT_ENV")
     if not name:
