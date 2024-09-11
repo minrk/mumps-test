@@ -113,7 +113,9 @@ def time_mumps_python(size: int) -> float:
 
     lap = LaplacianNd(grid_shape=(size, size))
     A = lap.tosparse()
-    b = np.linspace(0, 1, size * size)
+    # sin(x) * sin(y)
+    x = np.sin(np.linspace(0, np.pi, size))
+    b = np.outer(x, x).flatten()
     times = {}
     with mumps.Context() as ctx:
         ctx.set_matrix(A, overwrite_a=True, symmetric=True)
