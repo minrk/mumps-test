@@ -241,7 +241,7 @@ def main():
         if not args.envs:
             blas = args.blas or default_blas
             args.envs = [
-                f"{args.kind}-{build}-{blas}" for build in ("before", "omp", "gemmt")
+                f"{build}-{blas}" for build in ("before", "omp", "gemmt")
             ]
         collect(
             size=args.size,

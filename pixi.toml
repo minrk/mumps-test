@@ -48,16 +48,9 @@ python-mumps = "*"
 scipy = "*"
 
 [environments]
-mumps-before-openblas = ["python-mumps", "before", "openblas"]
-mumps-omp-openblas = ["python-mumps", "omp", "openblas"]
-mumps-gemmt-openblas = ["python-mumps", "gemmt", "openblas"]
-mumps-before-mkl = ["python-mumps", "before", "mkl"]
-mumps-omp-mkl = ["python-mumps", "omp", "mkl"]
-mumps-gemmt-mkl = ["python-mumps", "gemmt", "mkl"]
-fenics-before-openblas = ["fenics", "before", "openblas"]
-fenics-omp-openblas = ["fenics", "omp", "openblas"]
-fenics-gemmt-openblas = ["fenics", "gemmt", "openblas"]
-fenics-before-mkl = ["fenics", "before", "mkl"]
-fenics-omp-mkl = ["fenics", "omp", "mkl"]
-fenics-gemmt-mkl = ["fenics", "gemmt", "mkl"]
-
+before-openblas = ["fenics", "python-mumps", "before", "openblas"]
+omp-openblas = ["fenics", "python-mumps", "omp", "openblas"]
+gemmt-openblas = ["fenics", "python-mumps", "gemmt", "openblas"]
+before-mkl = ["fenics", "python-mumps", "before", "mkl"]
+omp-mkl = ["fenics", "python-mumps", "omp", "mkl"]
+gemmt-mkl = ["fenics", "python-mumps", "gemmt", "mkl"]
