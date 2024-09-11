@@ -21,7 +21,7 @@ except ImportError:
 
 try:
     import mumps
-    import scipy.sparse as sp
+    from scipy.sparse.linalg import LaplacianNd
     import numpy as np
 except ImportError:
     pass
@@ -198,18 +198,9 @@ def time_solve_poisson(size: int) -> float:
 
 
 def time_mumps_python(size: int) -> float:
-    sq_size = size * size
-    A = sp.diags_array(
-        [
-            -30 / 12 * np.ones(sq_size),
-            16 / 12 * np.ones(sq_size - 1),
-            16 / 12 * np.ones(sq_size - 1),
-            # -1 / 12 * np.ones(size - 2),
-            # -1 / 12 * np.ones(size - 2),
-        ],
-        offsets=[0, -1, 1],  # , -2, 2],
-    )
-    b = np.linspace(0, 1, sq_size)
+    lap = LaplacianNd(grid_shape=(size, size))
+    A = lap.tosparse()
+    b = np.linspace(0, 1, size * size)
     times = {}
     with mumps.Context() as ctx:
         ctx.set_matrix(A, overwrite_a=True, symmetric=True)
