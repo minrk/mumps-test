@@ -1,7 +1,6 @@
 import argparse
 import os
 import json
-import shlex
 import sys
 import time
 from pathlib import Path
@@ -29,95 +28,6 @@ except ImportError:
 here = Path(__file__).parent
 
 
-def define_envs():
-    builds = {
-        "omp": 3,
-        "before": 2,
-        "gemmt": 104,
-    }
-
-    for blas in ("openblas", "mkl"):
-        if blas == "mkl":
-            platforms = ["linux-64"]
-        else:
-            platforms = ["linux-64", "osx-arm64"]
-        base_spec = [
-            "python=3.12",
-            "pip",
-            f"blas=*=*{blas}",
-        ]
-        for kind in ("fenics", "mumps"):
-            if kind == "fenics":
-                mumps_pkg = "mumps-mpi"
-                test_spec = ["fenics-dolfinx", "mpich", "wurlitzer"]
-            else:
-                mumps_pkg = "mumps-seq"
-                test_spec = ["scipy", "python-mumps"]
-
-            for name, build_number in builds.items():
-                channels = ["conda-forge"]
-                pin_spec = [f"{mumps_pkg}=5.7.3=*_{build_number}"]
-                if name == "gemmt":
-                    channels.insert(0, "minrk/label/mumps-gemmt")
-                env_name = f"{kind}-{name}-{blas}"
-                env_path = here / "envs" / env_name
-                env_path.mkdir(exist_ok=True, parents=True)
-                
-                pixi_toml = env_path / "pixi.toml"
-                if not pixi_toml.exists():
-                    with pixi_toml.open("w") as f:
-                        f.write("[project]\n")
-                        f.write(f'name = "{env_name}"\n')
-                        f.write(f"channels = {channels}\n")
-                        f.write(f"platforms = {platforms}\n")
-
-                def pixi(cmd):
-                    cmd_s = shlex.join(cmd)
-                    print(f"[{env_path}]> pixi {cmd_s}")
-                    return run(["pixi"] + cmd, cwd=env_path, check=True)
-
-                # if not (env_path / "pixi.toml").exists():
-                #     platform_args = [f"--platform={platform}" for platform in platforms]
-                #     channel_args = [f"--channel={channel}" for channel in channels]
-                #     pixi(["init"] + platform_args + channel_args)
-
-                pixi(["add", "--no-install"] + base_spec + test_spec + pin_spec)
-
-
-def create_envs(blas, kind="mumps"):
-    spec = [
-        "python=3.12",
-        "pip",
-        f"blas=*=*{blas}",
-    ]
-    if kind == "fenics":
-        mumps_pkg = "mumps-mpi"
-        spec.extend([
-            "mpich",
-            "fenics-dolfinx",
-            "wurlitzer",
-        ])
-    else:
-        mumps_pkg = "mumps-seq"
-        spec.extend([
-            "scipy",
-            "python-mumps",
-        ])
-
-    for name, extra_spec in [
-        ("before", [f"{mumps_pkg}=5.7.3=*_2"]),
-        ("omp", [f"{mumps_pkg}=5.7.3=*_4"]),
-        ("gemmt", [f"{mumps_pkg}=5.7.3=*_104"]),
-    ]:
-        env_name = f"{kind}-{name}-{blas}"
-        run(
-            ["mamba", "create", "-y", "-n", env_name, "-c", "minrk/label/mumps-gemmt"]
-            + spec
-            + extra_spec,
-            check=True,
-        )
-
-
 def parse_mumps_times(output: str) -> dict[str, float]:
     elapsed_time_in = "elapsed time"
     times = {}
@@ -128,7 +38,7 @@ def parse_mumps_times(output: str) -> dict[str, float]:
                 print("no match", line, file=sys.stderr)
             continue
         rest = line[len(elapsed_time_in) :]
-        first_word, rest = rest.split(None, 1)
+        _first_word, rest = rest.split(None, 1)
 
         label, _, rhs = rest.partition("=")
         label = label.strip()
@@ -189,7 +99,7 @@ def time_solve_poisson(size: int) -> float:
     problem = create_poisson_problem(size)
     with wurlitzer.pipes(stderr=None) as (stdout, _):
         tic = time.perf_counter()
-        uh = problem.solve()
+        _uh = problem.solve()
         toc = time.perf_counter()
     times = parse_mumps_times(stdout.getvalue())
     times["overall"] = toc - tic
@@ -198,6 +108,7 @@ def time_solve_poisson(size: int) -> float:
 
 
 def time_mumps_python(size: int) -> float:
+    """Time a simple 2D Laplacian solve with python-mumps"""
     lap = LaplacianNd(grid_shape=(size, size))
     A = lap.tosparse()
     b = np.linspace(0, 1, size * size)
@@ -255,18 +166,15 @@ def run_one(env_name, samples, size, omp_threads, mpi_size, kind):
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     env["OMP_NUM_THREADS"] = str(omp_threads)
-    env_path = here / "envs" / env_name
-    print(f"Running in {env_path}")
-    assert env_path.exists()
     print(f"Collecting {fname}")
     # don't use mamba/conda run, which suppresses output
     if kind == "fenics":
         prefix = ["mpiexec", "-n", f"{mpi_size}"]
     else:
         prefix = []
-    p = run(
-        ["pixi", "run", "--frozen", "--manifest-path", str(here / "envs" / env_name / "pixi.toml")] +
-        prefix
+    _p = run(
+        ["pixi", "run", "--frozen", "--environment", env_name]
+        + prefix
         + [
             "python",
             __file__,
@@ -316,10 +224,13 @@ def main():
         type=str,
         nargs="+",
     )
+    collect_parser.add_argument(
+        "--blas",
+        type=str,
+        choices=["openblas", "mkl"],
+    )
     collect_parser.add_argument("--np", type=int, nargs="+", default=[1, 2, 4])
     collect_parser.add_argument("--threads", type=int, nargs="+", default=[1, 2, 4])
-
-    envs_parser.add_argument("blas", nargs="?", default=default_blas)
 
     args = parser.parse_args()
     if args.action == "inner":
@@ -328,9 +239,9 @@ def main():
         if args.kind == "mumps":
             args.np = [1]
         if not args.envs:
+            blas = args.blas or default_blas
             args.envs = [
-                f"{args.kind}-{build}-{default_blas}"
-                for build in ("before", "omp", "gemmt")
+                f"{args.kind}-{build}-{blas}" for build in ("before", "omp", "gemmt")
             ]
         collect(
             size=args.size,
@@ -340,12 +251,9 @@ def main():
             envs=args.envs,
             kind=args.kind,
         )
-    elif args.action == "envs":
-        create_envs(blas=args.blas, kind=args.kind)
     else:
         raise ValueError("Specify an action: 'inner' or 'collect'")
 
 
 if __name__ == "__main__":
-    # define_envs()
     main()

@@ -1,0 +1,63 @@
+[project]
+authors = ["Min RK <benjaminrk@gmail.com>"]
+channels = ["conda-forge"]
+description = "Add a short description here"
+name = "mumps-test"
+platforms = ["osx-arm64", "linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = "3.12.*"
+pip = ">=24.2,<25"
+mpi = { version = "*", build = "mpich" }
+
+
+[feature.before.dependencies]
+mumps-seq = { version = "==5.7.3", build = "*_2" }
+mumps-mpi = { version = "==5.7.3", build = "*_2" }
+
+[feature.omp.dependencies]
+mumps-seq = { version = "==5.7.3", build = "*_3" }
+mumps-mpi = { version = "==5.7.3", build = "*_3" }
+
+[feature.gemmt]
+channels = [{channel = "minrk/label/mumps-gemmt", priority = 1}, "conda-forge"]
+
+[feature.gemmt.dependencies]
+mumps-seq = { version = "==5.7.3", build = "*_104" }
+mumps-mpi = { version = "==5.7.3", build = "*_104" }
+
+[feature.openblas.dependencies]
+blas = { version = "*", build = "*openblas" }
+
+[feature.mkl]
+platforms = ["linux-64"]
+
+[feature.mkl.dependencies]
+blas = { version = "*", build = "*mkl" }
+
+
+[feature.fenics.dependencies]
+fenics-dolfinx = "0.8.0"
+wurlitzer = ">=3.1.1"
+
+[feature.python-mumps.dependencies]
+python-mumps = "*"
+scipy = "*"
+
+[environments]
+mumps-before-openblas = ["python-mumps", "before", "openblas"]
+mumps-omp-openblas = ["python-mumps", "omp", "openblas"]
+mumps-gemmt-openblas = ["python-mumps", "gemmt", "openblas"]
+mumps-before-mkl = ["python-mumps", "before", "mkl"]
+mumps-omp-mkl = ["python-mumps", "omp", "mkl"]
+mumps-gemmt-mkl = ["python-mumps", "gemmt", "mkl"]
+fenics-before-openblas = ["fenics", "before", "openblas"]
+fenics-omp-openblas = ["fenics", "omp", "openblas"]
+fenics-gemmt-openblas = ["fenics", "gemmt", "openblas"]
+fenics-before-mkl = ["fenics", "before", "mkl"]
+fenics-omp-mkl = ["fenics", "omp", "mkl"]
+fenics-gemmt-mkl = ["fenics", "gemmt", "mkl"]
+
