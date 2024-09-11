@@ -264,16 +264,18 @@ def main():
 
     inner_parser.add_argument("--out", type=str)
 
+    default_blas = "mkl" if sys.platform == 'linux' else 'openblas'
+    
     collect_parser.add_argument(
         "--envs",
         type=str,
         nargs="+",
-        default=["mumps-before", "mumps-openmp", "mumps-gemmt"],
+        default=[f"mumps-before-{default_blas}", f"mumps-omp-{default_blas}", f"mumps-gemmt-{default_blas}"],
     )
     collect_parser.add_argument("--np", type=int, nargs="+", default=[1, 2, 4])
     collect_parser.add_argument("--threads", type=int, nargs="+", default=[1, 2, 4])
 
-    envs_parser.add_argument("blas", nargs="?", default="openblas")
+    envs_parser.add_argument("blas", nargs="?", default=default_blas)
 
     args = parser.parse_args()
     if args.action == "inner":
