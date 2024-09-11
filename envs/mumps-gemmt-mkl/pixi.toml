@@ -1,0 +1,12 @@
+[project]
+name = "mumps-gemmt-mkl"
+channels = ['minrk/label/mumps-gemmt', 'conda-forge']
+platforms = ['linux-64']
+
+[dependencies]
+python = "3.12.*"
+pip = ">=24.2,<25"
+blas = { version = "*", build = "*mkl" }
+scipy = ">=1.14.1,<2"
+python-mumps = ">=0.0.2,<0.0.3"
+mumps-seq = { version = "==5.7.3", build = "*_104" }

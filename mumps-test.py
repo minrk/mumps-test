@@ -1,6 +1,7 @@
 import argparse
 import os
 import json
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -25,6 +26,63 @@ try:
 except ImportError:
     pass
 
+here = Path(__file__).parent
+
+
+def define_envs():
+    builds = {
+        "omp": 3,
+        "before": 2,
+        "gemmt": 104,
+    }
+
+    for blas in ("openblas", "mkl"):
+        if blas == "mkl":
+            platforms = ["linux-64"]
+        else:
+            platforms = ["linux-64", "osx-arm64"]
+        base_spec = [
+            "python=3.12",
+            "pip",
+            f"blas=*=*{blas}",
+        ]
+        for kind in ("fenics", "mumps"):
+            if kind == "fenics":
+                mumps_pkg = "mumps-mpi"
+                test_spec = ["fenics-dolfinx", "mpich", "wurlitzer"]
+            else:
+                mumps_pkg = "mumps-seq"
+                test_spec = ["scipy", "python-mumps"]
+
+            for name, build_number in builds.items():
+                channels = ["conda-forge"]
+                pin_spec = [f"{mumps_pkg}=5.7.3=*_{build_number}"]
+                if name == "gemmt":
+                    channels.insert(0, "minrk/label/mumps-gemmt")
+                env_name = f"{kind}-{name}-{blas}"
+                env_path = here / "envs" / env_name
+                env_path.mkdir(exist_ok=True, parents=True)
+                
+                pixi_toml = env_path / "pixi.toml"
+                if not pixi_toml.exists():
+                    with pixi_toml.open("w") as f:
+                        f.write("[project]\n")
+                        f.write(f'name = "{env_name}"\n')
+                        f.write(f"channels = {channels}\n")
+                        f.write(f"platforms = {platforms}\n")
+
+                def pixi(cmd):
+                    cmd_s = shlex.join(cmd)
+                    print(f"[{env_path}]> pixi {cmd_s}")
+                    return run(["pixi"] + cmd, cwd=env_path, check=True)
+
+                # if not (env_path / "pixi.toml").exists():
+                #     platform_args = [f"--platform={platform}" for platform in platforms]
+                #     channel_args = [f"--channel={channel}" for channel in channels]
+                #     pixi(["init"] + platform_args + channel_args)
+
+                pixi(["add", "--no-install"] + base_spec + test_spec + pin_spec)
+
 
 def create_envs(blas, kind="mumps"):
     spec = [
@@ -37,6 +95,7 @@ def create_envs(blas, kind="mumps"):
         spec.extend([
             "mpich",
             "fenics-dolfinx",
+            "wurlitzer",
         ])
     else:
         mumps_pkg = "mumps-seq"
@@ -57,17 +116,6 @@ def create_envs(blas, kind="mumps"):
             + extra_spec,
             check=True,
         )
-        if kind == "fenics":
-            run([
-                "mamba",
-                "run",
-                "-n",
-                env_name,
-                "python3",
-                "-mpip",
-                "install",
-                "wurlitzer",
-            ])
 
 
 def parse_mumps_times(output: str) -> dict[str, float]:
@@ -145,7 +193,7 @@ def time_solve_poisson(size: int) -> float:
         toc = time.perf_counter()
     times = parse_mumps_times(stdout.getvalue())
     times["overall"] = toc - tic
-    print(stdout.getvalue())
+    # print(stdout.getvalue())
     return times
 
 
@@ -178,8 +226,13 @@ def time_mumps_python(size: int) -> float:
 
 
 def inner_main(size: int, samples: int, fname: str, kind: str):
+    name = os.environ.get("PIXI_PROJECT_NAME")
+    if not name:
+        name = os.environ.get("CONDA_DEFAULT_ENV")
+    if not name:
+        name = Path(sys.prefix).name
     common_fields = {
-        "env": Path(sys.prefix).name,
+        "env": name,
         "threads": int(os.environ.get("OMP_NUM_THREADS", "1")),
         "size": size,
         "kind": kind,
@@ -211,9 +264,9 @@ def run_one(env_name, samples, size, omp_threads, mpi_size, kind):
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     env["OMP_NUM_THREADS"] = str(omp_threads)
-    env_bin = Path(env["CONDA_ROOT"]) / "envs" / env_name / "bin"
-    assert env_bin.exists()
-    env["PATH"] = f"{env_bin}:{env['PATH']}"
+    env_path = here / "envs" / env_name
+    print(f"Running in {env_path}")
+    assert env_path.exists()
     print(f"Collecting {fname}")
     # don't use mamba/conda run, which suppresses output
     if kind == "fenics":
@@ -221,6 +274,7 @@ def run_one(env_name, samples, size, omp_threads, mpi_size, kind):
     else:
         prefix = []
     p = run(
+        ["pixi", "run", "--frozen", "--manifest-path", str(here / "envs" / env_name / "pixi.toml")] +
         prefix
         + [
             "python",
@@ -264,13 +318,12 @@ def main():
 
     inner_parser.add_argument("--out", type=str)
 
-    default_blas = "mkl" if sys.platform == 'linux' else 'openblas'
-    
+    default_blas = "mkl" if sys.platform == "linux" else "openblas"
+
     collect_parser.add_argument(
         "--envs",
         type=str,
         nargs="+",
-        default=[f"mumps-before-{default_blas}", f"mumps-omp-{default_blas}", f"mumps-gemmt-{default_blas}"],
     )
     collect_parser.add_argument("--np", type=int, nargs="+", default=[1, 2, 4])
     collect_parser.add_argument("--threads", type=int, nargs="+", default=[1, 2, 4])
@@ -283,6 +336,11 @@ def main():
     elif args.action == "collect":
         if args.kind == "mumps":
             args.np = [1]
+        if not args.envs:
+            args.envs = [
+                f"{args.kind}-{build}-{default_blas}"
+                for build in ("before", "omp", "gemmt")
+            ]
         collect(
             size=args.size,
             samples=args.samples,
@@ -298,4 +356,5 @@ def main():
 
 
 if __name__ == "__main__":
+    # define_envs()
     main()
