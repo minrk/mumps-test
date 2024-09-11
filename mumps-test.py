@@ -6,24 +6,13 @@ import time
 from pathlib import Path
 from subprocess import run
 
+from scipy.sparse.linalg import LaplacianNd
+import numpy as np
 
-try:
-    import wurlitzer
-    from mpi4py import MPI
-    import ufl
-    from dolfinx import default_scalar_type
-    from dolfinx import fem, mesh
+import typing
+
+if typing.TYPE_CHECKING:
     from dolfinx.fem.petsc import LinearProblem
-except ImportError:
-    # not needed in outer env
-    pass
-
-try:
-    import mumps
-    from scipy.sparse.linalg import LaplacianNd
-    import numpy as np
-except ImportError:
-    pass
 
 here = Path(__file__).parent
 
@@ -52,6 +41,12 @@ def parse_mumps_times(output: str) -> dict[str, float]:
 
 
 def create_poisson_problem(size: int) -> "LinearProblem":
+    from mpi4py import MPI
+    import ufl
+    from dolfinx import default_scalar_type
+    from dolfinx import fem, mesh
+    from dolfinx.fem.petsc import LinearProblem
+
     # create a poisson problem
     domain = mesh.create_unit_square(
         MPI.COMM_WORLD, size, size, mesh.CellType.quadrilateral
@@ -96,12 +91,17 @@ def create_poisson_problem(size: int) -> "LinearProblem":
 
 def time_solve_poisson(size: int) -> float:
     """Time solving a poisson problem of a given size"""
+    import wurlitzer
+
     problem = create_poisson_problem(size)
     with wurlitzer.pipes(stderr=None) as (stdout, _):
         tic = time.perf_counter()
         _uh = problem.solve()
         toc = time.perf_counter()
     times = parse_mumps_times(stdout.getvalue())
+    times["analyze"] = times.pop("analysis driver")
+    times["factorize"] = times.pop("factorization driver")
+    times["solve"] = times.pop("solve driver")
     times["overall"] = toc - tic
     # print(stdout.getvalue())
     return times
@@ -109,12 +109,15 @@ def time_solve_poisson(size: int) -> float:
 
 def time_mumps_python(size: int) -> float:
     """Time a simple 2D Laplacian solve with python-mumps"""
+    import mumps
+
     lap = LaplacianNd(grid_shape=(size, size))
     A = lap.tosparse()
     b = np.linspace(0, 1, size * size)
     times = {}
     with mumps.Context() as ctx:
         ctx.set_matrix(A, overwrite_a=True, symmetric=True)
+        start = time.perf_counter()
         ctx.analyze(ordering="metis")
         ctx.factor(reuse_analysis=True)
         times["analyze"] = ctx.analysis_stats.time
@@ -123,11 +126,14 @@ def time_mumps_python(size: int) -> float:
         ctx.solve(b)
         toc = time.perf_counter()
         times["solve"] = toc - tic
+        times["overall"] = toc - start
 
     return times
 
 
 def inner_main(size: int, samples: int, fname: str, kind: str):
+    from mpi4py import MPI
+
     name = os.environ.get("PIXI_PROJECT_NAME")
     if not name:
         name = os.environ.get("CONDA_DEFAULT_ENV")
@@ -240,9 +246,7 @@ def main():
             args.np = [1]
         if not args.envs:
             blas = args.blas or default_blas
-            args.envs = [
-                f"{build}-{blas}" for build in ("before", "omp", "gemmt")
-            ]
+            args.envs = [f"{build}-{blas}" for build in ("before", "omp", "gemmt")]
         collect(
             size=args.size,
             samples=args.samples,
