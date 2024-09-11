@@ -99,9 +99,9 @@ def time_solve_poisson(size: int) -> float:
         _uh = problem.solve()
         toc = time.perf_counter()
     times = parse_mumps_times(stdout.getvalue())
-    times["analyze"] = times.pop("analysis driver")
-    times["factorize"] = times.pop("factorization driver")
-    times["solve"] = times.pop("solve driver")
+    times["analyze"] = times.pop("analysis driver", 0)
+    times["factorize"] = times.pop("factorization driver", 0)
+    times["solve"] = times.pop("solve driver", 0)
     times["overall"] = toc - tic
     # print(stdout.getvalue())
     return times
