@@ -46,7 +46,7 @@ def create_envs(blas, kind="mumps"):
         ])
 
     for name, extra_spec in [
-        ("before", [f"{mumps_pkg}=5.7.3=*_0"]),
+        ("before", [f"{mumps_pkg}=5.7.3=*_2"]),
         ("omp", [f"{mumps_pkg}=5.7.3=*_4"]),
         ("gemmt", [f"{mumps_pkg}=5.7.3=*_104"]),
     ]:
