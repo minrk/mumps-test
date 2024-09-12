@@ -207,6 +207,7 @@ def run_one(env_name, samples, size, omp_threads, mpi_size, kind):
         env=env,
     )
 
+
 def core_count():
     if os.environ.get("CPU_LIMIT"):
         return int(float(os.environ["CPU_LIMIT"]))
@@ -215,6 +216,31 @@ def core_count():
 
 
 def collect(samples, size, threads, mpi_sizes, envs, kinds):
+    from tqdm import tqdm
+
+    print("Collecting:")
+    print(f"  samples: {samples}")
+    print(f"  mpi sizes: {mpi_sizes}")
+    print(f"  threads: {threads}")
+    print(f"  envs: {envs}")
+    print(f"  kinds: {kinds}")
+    total = (
+        samples
+        * (
+            # only fenics uses mpi > 1
+            len(mpi_sizes) * ("fenics" in kinds)
+            + int("mumps" in kinds and 1 in mpi_sizes)
+        )
+        * (
+            # 'before' only runs with 1 thread
+            len(threads) * len([env for env in envs if "before" not in env])
+            + (len([env for env in envs if "before" in env]) * int(1 in threads))
+        )
+    )
+
+    print(f"  approximate total test runs (not counting skips for cpu count): {total}")
+
+    progress = tqdm(desc="measurements", total=total)
     for mpi_size in mpi_sizes:
         for kind in kinds:
             if kind == "mumps" and mpi_size > 1:
@@ -222,13 +248,17 @@ def collect(samples, size, threads, mpi_sizes, envs, kinds):
                 continue
             for omp_threads in threads:
                 if omp_threads * mpi_size > core_count():
-                    print(f"Skipping mpi={mpi_size} x omp={omp_threads} > cpu={core_count()}")
+                    print(
+                        f"Skipping mpi={mpi_size} x omp={omp_threads} > cpu={core_count()}"
+                    )
+                    progress.update(samples * len(envs))
                     continue
                 for env_name in envs:
                     if omp_threads > 1 and "before" in env_name:
                         print(f"Skipping 'before' test for omp={omp_threads}")
                         continue
                     run_one(env_name, samples, size, omp_threads, mpi_size, kind)
+                    progress.update(samples)
 
 
 def main():
@@ -268,7 +298,7 @@ def main():
     if args.action == "inner":
         inner_main(size=args.size, samples=args.samples, fname=args.out, kind=args.kind)
     elif args.action == "collect":
-        if args.kind =='*':
+        if args.kind == "*":
             kinds = ["mumps", "fenics"]
         else:
             kinds = [args.kind]
@@ -281,8 +311,12 @@ def main():
                 blases.append("mkl")
             if sys.platform == "Darwin":
                 blases.append("accelerate")
-            args.envs = [f"{build}-{blas}" for build in ("before", "omp", "gemmt") for blas in blases]
-        
+            args.envs = [
+                f"{build}-{blas}"
+                for build in ("before", "omp", "gemmt")
+                for blas in blases
+            ]
+
         try:
             # there is no gemmt build for accelerate
             args.envs.remove("accelerate-gemmt")
