@@ -3,6 +3,7 @@ import os
 import json
 import sys
 import time
+from multiprocessing import cpu_count
 from pathlib import Path
 from subprocess import run
 
@@ -174,6 +175,14 @@ def run_one(env_name, samples, size, omp_threads, mpi_size, kind):
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     env["OMP_NUM_THREADS"] = str(omp_threads)
+
+    # if parallelizing with OMP or mpi,
+    # set other thread counts to 1 to avoid oversubscribing
+    if omp_threads > 1 or mpi_size > 1:
+        env["MKL_NUM_THREADS"] = "1"
+        env["OPENBLAS_NUM_THREADS"] = "1"
+        # for Accelerate, probably has no effect on arm mac
+        env["VECLIB_MAXIMUM_THREADS"] = "1"
     print(f"Collecting {fname}")
     # don't use mamba/conda run, which suppresses output
     if kind == "fenics":
@@ -197,14 +206,25 @@ def run_one(env_name, samples, size, omp_threads, mpi_size, kind):
         env=env,
     )
 
+def core_count():
+    if os.environ.get("CPU_LIMIT"):
+        return int(float(os.environ["CPU_LIMIT"]))
+    else:
+        return cpu_count()
 
-def collect(samples, size, threads, mpi_sizes, envs, kind):
+
+def collect(samples, size, threads, mpi_sizes, envs, kinds):
     for mpi_size in mpi_sizes:
-        for omp_threads in threads:
-            for env_name in envs:
-                if omp_threads > 1 and "before" in env_name:
+        for kind in kinds:
+            if kind == "mumps" and mpi_size > 1:
+                continue
+            for omp_threads in threads:
+                if omp_threads * mpi_size > core_count():
                     continue
-                run_one(env_name, samples, size, omp_threads, mpi_size, kind)
+                for env_name in envs:
+                    if omp_threads > 1 and "before" in env_name:
+                        continue
+                    run_one(env_name, samples, size, omp_threads, mpi_size, kind)
 
 
 def main():
@@ -220,7 +240,7 @@ def main():
     parser.add_argument("--size", type=int, default=1024)
     parser.add_argument("--samples", type=int, default=5)
     parser.add_argument(
-        "--kind", type=str, default="mumps", choices=["mumps", "fenics"]
+        "--kind", type=str, default="mumps", choices=["mumps", "fenics", "*"]
     )
 
     inner_parser.add_argument("--out", type=str)
@@ -235,27 +255,42 @@ def main():
     collect_parser.add_argument(
         "--blas",
         type=str,
-        choices=["openblas", "mkl"],
+        choices=["openblas", "mkl", "accelerate"],
     )
-    collect_parser.add_argument("--np", type=int, nargs="+", default=[1, 2, 4])
-    collect_parser.add_argument("--threads", type=int, nargs="+", default=[1, 2, 4])
+    collect_parser.add_argument("--np", type=int, nargs="+", default=[1, 2, 4, 8])
+    collect_parser.add_argument("--threads", type=int, nargs="+", default=[1, 2, 4, 8])
 
     args = parser.parse_args()
     if args.action == "inner":
         inner_main(size=args.size, samples=args.samples, fname=args.out, kind=args.kind)
     elif args.action == "collect":
-        if args.kind == "mumps":
-            args.np = [1]
+        if args.kind =='*':
+            kinds = ["mumps", "fenics"]
+        else:
+            kinds = [args.kind]
         if not args.envs:
             blas = args.blas or default_blas
             args.envs = [f"{build}-{blas}" for build in ("before", "omp", "gemmt")]
+        elif args.envs == ["*"]:
+            blases = ["openblas"]
+            if sys.platform == "linux":
+                blases.append("mkl")
+            if sys.platform == "Darwin":
+                blases.append("accelerate")
+            args.envs = [f"{build}-{blas}" for build in ("before", "omp", "gemmt") for blas in blases]
+        
+        try:
+            # there is no gemmt build for accelerate
+            args.envs.remove("accelerate-gemmt")
+        except IndexError:
+            pass
         collect(
             size=args.size,
             samples=args.samples,
             threads=args.threads,
             mpi_sizes=args.np,
             envs=args.envs,
-            kind=args.kind,
+            kinds=kinds,
         )
     else:
         raise ValueError("Specify an action: 'inner' or 'collect'")
