@@ -154,7 +154,8 @@ def inner_main(size: int, samples: int, fname: str, kind: str):
     else:
         common_fields["procs"] = 1
         rank = 0
-    print(f"Collecting {common_fields} to {fname}")
+    if rank == 0:
+        print(f"Collecting {common_fields} to {fname}")
     for i in range(samples):
         if kind == "fenics":
             times = time_solve_poisson(size)
@@ -221,7 +222,7 @@ def collect(samples, size, threads, mpi_sizes, envs, kinds):
                 continue
             for omp_threads in threads:
                 if omp_threads * mpi_size > core_count():
-                    print(f"Skipping mpi={mpi_size} x omp={omp_threads} > {core_count()}")
+                    print(f"Skipping mpi={mpi_size} x omp={omp_threads} > cpu={core_count()}")
                     continue
                 for env_name in envs:
                     if omp_threads > 1 and "before" in env_name:
@@ -243,7 +244,7 @@ def main():
     parser.add_argument("--size", type=int, default=1024)
     parser.add_argument("--samples", type=int, default=5)
     parser.add_argument(
-        "--kind", type=str, default="mumps", choices=["mumps", "fenics", "*"]
+        "--kind", type=str, default="*", choices=["mumps", "fenics", "*"]
     )
 
     inner_parser.add_argument("--out", type=str)
