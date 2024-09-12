@@ -31,6 +31,7 @@ mumps-mpi = { version = "==5.7.3", build = "*_104" }
 
 [feature.openblas.dependencies]
 blas = { version = "*", build = "*openblas" }
+openblas = { version = "*", build = "*openmp*" }
 
 [feature.mkl]
 platforms = ["linux-64"]
