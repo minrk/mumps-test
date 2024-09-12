@@ -217,12 +217,15 @@ def collect(samples, size, threads, mpi_sizes, envs, kinds):
     for mpi_size in mpi_sizes:
         for kind in kinds:
             if kind == "mumps" and mpi_size > 1:
+                print(f"Skipping mumps test for mpi={mpi_size}")
                 continue
             for omp_threads in threads:
                 if omp_threads * mpi_size > core_count():
+                    print(f"Skipping mpi={mpi_size} x omp={omp_threads} > {core_count()}")
                     continue
                 for env_name in envs:
                     if omp_threads > 1 and "before" in env_name:
+                        print(f"Skipping 'before' test for omp={omp_threads}")
                         continue
                     run_one(env_name, samples, size, omp_threads, mpi_size, kind)
 
@@ -282,7 +285,7 @@ def main():
         try:
             # there is no gemmt build for accelerate
             args.envs.remove("accelerate-gemmt")
-        except IndexError:
+        except ValueError:
             pass
         collect(
             size=args.size,
