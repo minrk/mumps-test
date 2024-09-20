@@ -8,6 +8,7 @@ from pathlib import Path
 from subprocess import run
 
 from scipy.sparse.linalg import LaplacianNd
+from scipy.sparse import load_npz
 import numpy as np
 
 import typing
@@ -133,6 +134,68 @@ def time_mumps_python(size: int) -> float:
 
     return times
 
+def scipy_to_petsc():
+    print("Converting scipy to petsc")
+    from petsc4py import PETSc
+
+    A = load_npz("A.npz")
+    b = np.load("b.npy")
+    A_petsc = PETSc.Mat().createAIJ(
+        size=A.shape,
+        csr=(A.indptr, A.indices, A.data),
+    )
+    
+    A_petsc.assemble()
+    viewer = PETSc.Viewer().createBinary("A.dat", "w")
+    viewer(A_petsc)
+    b_petsc = PETSc.Vec().createSeq(len(b))
+    b_petsc.setArray(b)
+    viewer = PETSc.Viewer().createBinary("b.dat", "w")
+    viewer(b_petsc)
+
+def time_solve_petsc(size: int):
+    import wurlitzer
+    from petsc4py import PETSc
+    
+    petsc_options = PETSc.Options()
+    comm = PETSc.COMM_WORLD
+
+    if not Path("A.dat").exists():
+        comm.Barrier()
+        if comm.rank == 0:
+            scipy_to_petsc()
+        comm.Barrier()
+
+
+    times = {}
+    start = time.perf_counter()
+    viewer_A = PETSc.Viewer().createBinary("A.dat", "r")
+    viewer_b = PETSc.Viewer().createBinary("b.dat", "r")
+
+    A = PETSc.Mat(comm).load(viewer_A)
+    b = PETSc.Vec(comm).load(viewer_b)
+    x = PETSc.Vec().createMPI(b.getSize())
+    times["load"] = time.perf_counter() - start
+
+    petsc_options["mat_mumps_icntl_4"] = "3"
+    ksp = PETSc.KSP().create(comm)
+    ksp.setFromOptions()
+    ksp.setOperators(A)
+    ksp.setType('preonly')
+    pc=ksp.getPC()
+    pc.setType('cholesky')
+    pc.setFactorSolverType('mumps')
+    
+    with wurlitzer.pipes(stderr=None) as (stdout, _):
+        tic = time.perf_counter()
+        ksp.solve(b, x)
+        toc = time.perf_counter()
+    times.update(parse_mumps_times(stdout.getvalue()))
+    times["analyze"] = times.pop("analysis driver", 0)
+    times["factorize"] = times.pop("factorization driver", 0)
+    times["solve"] = times.pop("solve driver", 0)
+    times["overall"] = toc - tic
+    return times
 
 def inner_main(size: int, samples: int, fname: str, kind: str):
     from mpi4py import MPI
@@ -148,19 +211,24 @@ def inner_main(size: int, samples: int, fname: str, kind: str):
         "size": size,
         "kind": kind,
     }
-    if kind == "fenics":
-        common_fields["procs"] = MPI.COMM_WORLD.size
-        rank = MPI.COMM_WORLD.rank
-    else:
+    if kind == "mumps":
         common_fields["procs"] = 1
         rank = 0
+    else:
+        common_fields["procs"] = MPI.COMM_WORLD.size
+        rank = MPI.COMM_WORLD.rank
     if rank == 0:
         print(f"Collecting {common_fields} to {fname}")
     for i in range(samples):
-        if kind == "fenics":
-            times = time_solve_poisson(size)
-        else:
-            times = time_mumps_python(size)
+        match kind:
+            case "fenics":
+                times = time_solve_poisson(size)
+            case "petsc":
+                times = time_solve_petsc(size)
+            case "mumps":
+                times = time_mumps_python(size)
+            case _:
+                raise ValueError(f"Unexpected {kind=}")
         times.update(common_fields)
         if rank == 0:
             print(times)
@@ -186,10 +254,10 @@ def run_one(env_name, samples, size, omp_threads, mpi_size, kind):
         env["VECLIB_MAXIMUM_THREADS"] = "1"
     print(f"Collecting {fname}")
     # don't use mamba/conda run, which suppresses output
-    if kind == "fenics":
-        prefix = ["mpiexec", "-n", f"{mpi_size}"]
-    else:
+    if kind == "mumps":
         prefix = []
+    else:
+        prefix = ["mpiexec", "-n", f"{mpi_size}"]
     _p = run(
         ["pixi", "run", "--frozen", "--environment", env_name]
         + prefix
@@ -229,6 +297,7 @@ def collect(samples, size, threads, mpi_sizes, envs, kinds):
         * (
             # only fenics uses mpi > 1
             len(mpi_sizes) * ("fenics" in kinds)
+            + len(mpi_sizes) * ("petsc" in kinds)
             + int("mumps" in kinds and 1 in mpi_sizes)
         )
         * (
@@ -274,7 +343,7 @@ def main():
     parser.add_argument("--size", type=int, default=1024)
     parser.add_argument("--samples", type=int, default=5)
     parser.add_argument(
-        "--kind", type=str, default="*", choices=["mumps", "fenics", "*"]
+        "--kind", type=str, default="*", choices=["mumps", "fenics", "petsc", "*"]
     )
 
     inner_parser.add_argument("--out", type=str)
@@ -299,7 +368,7 @@ def main():
         inner_main(size=args.size, samples=args.samples, fname=args.out, kind=args.kind)
     elif args.action == "collect":
         if args.kind == "*":
-            kinds = ["mumps", "fenics"]
+            kinds = ["mumps", "fenics", "petsc"]
         else:
             kinds = [args.kind]
         if not args.envs:
